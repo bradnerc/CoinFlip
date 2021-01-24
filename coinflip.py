@@ -1,7 +1,7 @@
 from discord.ext import commands
+from discord import Game
 from dotenv import load_dotenv
 from PIL import Image
-from io import BytesIO
 import discord
 import random
 import re
@@ -9,21 +9,23 @@ import requests
 import json
 import os
 import urllib.request
-
-#TODO: Change messages to embed box
+import planechase_images
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-
+WOLFRAM = os.getenv('WOLFRAM')
 intents = discord.Intents.default()
 intents.members = True
 intents.reactions = True
 intents.messages = True
 bot = commands.Bot(command_prefix = '$', intents = intents)
 user_list = []
-revealvalues = []
 channel_ID = ""
-message_dict = {}
+wra = {}
+price_dict = {}
+planechase_list = []
+card_set = {}
+secret_message = discord.Embed(title= "The hidden values", color=0x1ae671)
 
 @bot.command(name = 'flip',
              brief = 'Flip a coin',
@@ -36,7 +38,7 @@ async def coinflip(ctx):
     if var == 0:
         toEmbed.add_field(name = "Results", value = "The coin landed on HEADS!", inline = True)
     else :
-        toEmbed.add_field(name="Results", value= "The coin laned on TAILS!", inline=True)
+        toEmbed.add_field(name="Results", value= "The coin landed on TAILS!", inline=True)
 
     sent = await ctx.send(embed = toEmbed)
 
@@ -99,14 +101,33 @@ async def roll(ctx, args:int):
     toEmbed=discord.Embed(color=0x1ae671)
     toEmbed.add_field(name = "Results", value = str(var) + ' was the result of your roll.')
     await ctx.send(embed = toEmbed)
+
+@bot.command(name = 'pRoll',
+             brief = 'Rolls the planar die',
+             help = '''4 sides of the die are blank, 1 side has the planeswalker symbol,
+             and the last side has the chaos symbol''')
+async def rollPlanar(ctx):
+    toEmbed = discord.Embed(color=0x1ae671)
+    res = random.randint(1,6)
+    if res == 1:
+        toEmbed.add_field(name="Rolling the Planar Die", value = 'You rolled the Chaos symbol!')
+        toEmbed.set_thumbnail(url ='https://i.ibb.co/xjPdVbc/output-onlinepngtools.png')
+    elif res == 6:
+        toEmbed.add_field(name="Rolling the Planar Die", value = 'You rolled the Planeswalker symbol!')
+        toEmbed.set_thumbnail(url = 'https://i.ibb.co/MG1Kx6n/output-onlinepngtools-1.png')
+    else:
+        toEmbed.add_field(name='Rolling the Planar Die', value = 'Nothing happened.')
+    await ctx.send(embed = toEmbed)
     
-@bot.command(name = 'test',
+@bot.command(name = 'secret',
              brief = 'A method for people to choose a number in secret',
              help = '''The bot will DM the listed users for their answers, and once
                     all users have replied, will send a message on the channel with
                     the answers''')
 async def reveal(ctx, *args):
     global channel_ID
+    global revealvalues
+    secret_message.clear_fields()
     await bot.wait_until_ready()
     for var in args:
         userRegex = re.compile(r'^[^#]+')
@@ -124,128 +145,248 @@ async def reveal(ctx, *args):
 
 @bot.event
 async def on_message(message):
-        if isinstance(message.channel, discord.channel.DMChannel) and message.author != bot.user:
-            if len(user_list) != 0:
-                await message.channel.send('Duly Noted')
-                revealvalues.append(message.author.name + ' chose ' + message.content + '!')
-                user_list.remove(message.author)
-                if(len(user_list) == 0):
-                    await bot.wait_until_ready()
-                    channel = bot.get_channel(int(channel_ID))
-                    await channel.send(revealvalues)
-        await bot.process_commands(message)
-
-@bot.command(name = 'find',
-             brief = 'Lookup a Magic the Gathering Card',
-             help = '''Lookup a Magic the Gathering Card. If there are no results
-                    this will return nothing''')
-async def findCard(ctx, *args):
-    global message_dict
-    search = ""
-    for name in args:
-        search += str(name) + " "
-    findImage = lookUpCard(search, 0)
-    getImage = findImage[0]
-    toEmbed=discord.Embed(title = "Card Search Results", color=0x1ae671)
-    toEmbed.set_image(url=getImage)
-    toEmbed.set_footer(text = "(1\\" + str(findImage[2]) + ")")
-    test = await ctx.send(embed = toEmbed)
-    await test.add_reaction('⬅')
-    await test.add_reaction('➡️')
-    message_dict[test.id] = [search, 0]
+    global secret_message
+    if isinstance(message.channel, discord.channel.DMChannel) and message.author != bot.user:
+        if len(user_list) != 0:
+            temp = message.author
+            secret_message.add_field(name= "...", value = temp.mention + "\n" + message.content, inline= True)
+            await message.channel.send('Duly Noted')
+            user_list.remove(message.author)
+            if(len(user_list) == 0):
+                await bot.wait_until_ready()
+                channel = bot.get_channel(int(channel_ID))
+                await channel.send(embed = secret_message)
+    await bot.process_commands(message)
 
 @bot.event
 async def on_raw_reaction_add(payload):
-    global message_dict
-    if payload.user_id != bot.user.id:
-        this_ID = payload.message_id
-        ID_res = message_dict.get(this_ID)
-        val = ID_res[1]
-        if str(payload.emoji) == '⬅':
-            val = ID_res[1] - 1
-        if str(payload.emoji) == '➡️':
-            val = ID_res[1] + 1
-        args = ID_res[0]
-        print(str(val) + "THIS IS VAL")
-        message_dict.update({int(this_ID) : [args, val]})
-        findImage = lookUpCard(args, val, int(this_ID))
-        print(findImage)
-        getimage = findImage[0]
-        channel = await bot.fetch_channel(payload.channel_id)
-        message = await channel.fetch_message(payload.message_id)
-        thisEmbed = message.embeds[0]
-        thisEmbed.set_image(url = getimage)
-        thisEmbed.set_footer(text = "(" + str(findImage[1]+1) + "\\" + str(findImage[2]) + ")")
-        await message.edit(embed = thisEmbed)
+    await react(payload)
 
 @bot.event
 async def on_raw_reaction_remove(payload):
-    global message_dict
+    await react(payload)
+                    
+async def react(payload):
     if payload.user_id != bot.user.id:
-        this_ID = payload.message_id
-        ID_res = message_dict.get(this_ID)
-        val = ID_res[1]
-        if str(payload.emoji) == '⬅':
-            val = ID_res[1] - 1
-        if str(payload.emoji) == '➡️':
-            val = ID_res[1] + 1
-        args = ID_res[0]
-        message_dict.update({int(this_ID) : [args, val]})
-        findImage = lookUpCard(args, val, int(this_ID))
-        getimage = findImage[0]
         channel = await bot.fetch_channel(payload.channel_id)
         message = await channel.fetch_message(payload.message_id)
-        thisEmbed = message.embeds[0]
-        thisEmbed.set_image(url = getimage)
-        thisEmbed.set_footer(text = "(" + str(findImage[1]+1) + "\\" + str(findImage[2]) + ")")
-        await message.edit(embed = thisEmbed)
+        this_ID = payload.message_id
+        if message.author == bot.user:
+            if message.embeds[0].title == "WolframAlpha Search":
+                if str(payload.emoji) == '⬅':
+                    await nextHowl(message, "-")
+                if str(payload.emoji) == '\N{BLACK RIGHTWARDS ARROW}':
+                    await nextHowl(message, "+")
+            elif message.embeds[0].title == "Card Price Results":
+                if str(payload.emoji) == '⬅':
+                    await nextPrice(message, "-")
+                if str(payload.emoji) == '\N{BLACK RIGHTWARDS ARROW}':
+                    await nextPrice(message, "+")
+                if str(payload.emoji) == '\N{WHITE HEAVY CHECK MARK}':
+                    await fetchPrices(message)
+            elif message.embeds[0].title == "Planechase":
+                if str(payload.emoji) == '⬅':
+                    await nextPlane(message, "-")
+                if str(payload.emoji) == '\N{BLACK RIGHTWARDS ARROW}':
+                    await nextPlane(message, "+")
+            else:
+                if str(payload.emoji) == '⬅':
+                    await nextCardPrice(message, "-")
+                if str(payload.emoji) == '\N{BLACK RIGHTWARDS ARROW}':
+                    await nextCardPrice(message, "+")
 
-def lookUpCard(cardName, num, *args):
-#args = optional parameter which tracks the message id
-#num = index position
-    global message_dict
-    response = requests.get("https://api.scryfall.com/cards/search?q=" + cardName)
+@bot.command(name = 'card',
+             brief = 'Look up a Magic the Gathering card',
+             help = '''Looks up a Magic the Gathering card. If more than one match is returned, select your
+                       card using the green checkmark. Each print variant will be given, along with the set name
+                       and card price in USD.''')
+async def findCard(ctx, *args):
+    # if user reacts to current card with a checkmark, then
+    # outputs all variants of card with corresponding set and price information
+    # add response for when there is exactly only one card with that name
+    # price_dict -> key = message.id, values = card name, image url, length of search index
+    global price_dict
+    image_urls = []
+    card_name = []
+    search = ""
+    for name in args:
+        search += str(name)
+    response = requests.get("https://api.scryfall.com/cards/search?q=" + search)
+    data = response.json()
+    if len(data['data']) == 1:
+        toEmbed=discord.Embed(title = "Processing", color=0x1ae671)
+        message = await ctx.send(embed = toEmbed)
+        image_urls.append(data['data'][0]['image_uris']['large'])
+        cardname = data['data'][0]['name']
+        cardname =cardname.replace(" ", "")
+        card_name.append(cardname)
+        price_dict[message.id] = (image_urls, card_name, 0)
+        await fetchPrices(message)
+        await message.add_reaction('\N{LEFTWARDS BLACK ARROW}')
+        await message.add_reaction('\N{BLACK RIGHTWARDS ARROW}')
+        await message.add_reaction('\N{WHITE HEAVY CHECK MARK}')
+        return
+    for i in range(0, len(data['data'])):
+        image_urls.append(data['data'][i]['image_uris']['large'])
+        cardname = data['data'][i]['name']
+        cardname = cardname.replace(" ", "")
+        card_name.append(cardname)
+    toEmbed = discord.Embed(title = "Card Price Results", color=0x1ae671)
+    toEmbed.set_image(url = data['data'][0]['image_uris']['large'])
+    toEmbed.set_footer(text = "(1\\" + str(len(data['data'])) + ")")
+    message = await ctx.send(embed = toEmbed)
+    price_dict[message.id] = [image_urls, card_name, 0]
+    await message.add_reaction('\N{LEFTWARDS BLACK ARROW}')
+    await message.add_reaction('\N{BLACK RIGHTWARDS ARROW}')
+    await message.add_reaction('\N{WHITE HEAVY CHECK MARK}')
+
+#cycle through cards to find the correct one to fetch prices for
+async def nextPrice(message, value):
+    global price_dict
+    if value == "-":
+        price_dict[message.id][2] -= 1
+    else:
+        price_dict[message.id][2] -= 1
+    price_dict[message.id][2] = cycleIndex(price_dict[message.id][2], len(price_dict[message.id][1])-1)
+    message.embeds[0].set_image(url = price_dict[message.id][0][price_dict[message.id][2]])
+    message.embeds[0].set_footer(text = "(" + str((price_dict[message.id][2])+1) + "\\" +
+                                 str(len(price_dict[message.id][1])) + ")")
+    await message.edit(embed = message.embeds[0])
+
+#card_set = list of set names, list of card images, list of prices, index location
+async def nextCardPrice(message, val):
+    global card_set
+    if val == "-":
+        card_set[message.id]['index'] -= 1
+    else:
+        card_set[message.id]['index'] += 1
+    card_set[message.id]['index'] = cycleIndex(card_set[message.id]['index'],
+                                               len(card_set[message.id]['image_uris'])-1)
+    index = card_set[message.id]['index']
+    message.embeds[0].set_image(url = card_set[message.id]['image_uris'][index])
+    message.embeds[0].set_footer(text = card_set[message.id]['set_name'][index] + "\n" +
+                                 "Non-foil: " + card_set[message.id]['prices'][index] + "\n"
+                                 + "Foil: " + card_set[message.id]['foil'][index] + "\n"
+                                 + "(" + str(card_set[message.id]['index']+1) + "\\" +
+                                 str(len(card_set[message.id]['image_uris'])) + ")")
+    await message.edit(embed = message.embeds[0])
+    
+# once card is confirmed, gets all variants of that card with corresponding price information
+# is called when reacting to appropriate message with a green checkmark
+# index is index of price_dict for the correct card
+# card_set = list of set names, list of card images, list of prices, index location
+async def fetchPrices(message):
+    global price_dict
+    global card_set
+    response = requests.get("https://api.scryfall.com/cards/search?q=" +
+                            price_dict[message.id][1][price_dict[message.id][2]] + "+unique%3Aprints")
     data = response.json()
     data2 = data['data']
-    if len(args) != 0:
-        if num <  0:
-            num = len(data2) - 1
-            message_dict.update({int(args[0]) : [cardName, num]})
-        if num > len(data2) - 1:
-            num = 0
-            message_dict.update({int(args[0]): [cardName, num]})
-    res = data2[num]
-    res2 = res['image_uris']
-    getimage = res2['normal']
-    return [getimage, num, len(data2)]
-
-@bot.command(name = 'price')
-# command to find price of given card
-async def lookUpPrice():
-    return
-
-@bot.command(name = "planechase")
+    cardsList = []
+    set_names = []
+    prices = []
+    foil_prices = []
+    card_info = {}
+    for i in range(len(data2)):
+        cardsList.append(data2[i]['image_uris']['large'])
+        set_names.append(data2[i]['set_name'])
+        prices.append(str(data2[i]['prices']['usd']))
+        foil_prices.append(str(data2[i]['prices']['usd_foil']))
+    card_info['index'] = 0
+    card_info['image_uris'] = cardsList
+    card_info['set_name'] = set_names
+    card_info['prices'] = prices
+    card_info['foil'] = foil_prices
+    card_set[message.id] = card_info
+    toEmbed = discord.Embed(title = data2[0]['name'])
+    toEmbed.set_footer(text = card_set[message.id]['set_name'][0] + "\n" +
+                       "Non-foil: " + card_set[message.id]['prices'][0] + "\n" +
+                       "Foil: " + card_set[message.id]['foil'][0] + "\n" +
+                       "(1\\" + str(len(card_set[message.id]['image_uris'])) + ")")
+    toEmbed.set_image(url = card_set[message.id]['image_uris'][0])
+    message.embeds[0] = toEmbed
+    await message.edit(embed = message.embeds[0])
+                          
+@bot.command(name = "planechase",
+             brief = "A deck containing Magic the Gathering Planechase cards",
+             help = 'A randomized order of all 86 Planechase related cards')
 async def planeChase(ctx):
+    global planechase_list
     response = requests.get("https://api.scryfall.com/cards/search?q=layout%3Aplanar")
     data = response.json()
-    print(type(data))
     data2 = data['data']
-    print(len(data2))
-    print(type(data2))
-    print(data2[0])
-    res = data2[0]
-    res2 = res['image_uris']
-    getimage = res2['large']
-    image = Image.open(urllib.request.urlopen(getimage))
-    image = image.rotate(270, expand = True)
-    print(type(image))
-    with BytesIO() as image_binary:
-        image.save(image_binary, 'PNG')
-        image_binary.seek(0)
-        sent = await ctx.send(file=discord.File(fp=image_binary, filename='image.png'))
+    cardsList = []
+    for i in range(len(data2)):
+        cardsList.append(data2[i]['image_uris']['large'])
+    planechase_list.append(cardsList)
+    planechase_list.append(0)
+    random.shuffle(planechase_list[0])
+    getimage = planechase_list[0][0]
+    toEmbed=discord.Embed(title = "Planechase", color=0x1ae671)
+    toEmbed.set_image(url=planechase_images.plc[getimage])   
+    sent = await ctx.send(embed = toEmbed)
     await sent.add_reaction('\N{LEFTWARDS BLACK ARROW}')
     await sent.add_reaction('\N{BLACK RIGHTWARDS ARROW}')
 
-#TODO: shuffle the order of dict
+async def nextPlane(message, val):
+    global planechase_list
+    if val == "-":
+        planechase_list[1] -= 1
+    else:
+        planechase_list[1] += 1
+    if planechase_list[1] > len(planechase_list[0])-1:
+        planechase_list[1] = 0
+    if planechase_list[1] < 0:
+        planechase_list[1] = len(planechase_list[0])-1
+    message.embeds[0].set_image(url = planechase_images.plc[planechase_list[0][planechase_list[1]]])
+    await message.edit(embed = message.embeds[0])
+
+@bot.command(name='howl',
+             brief= 'Ask WolframAlpha a question',
+             help = 'Returns query result in image forms')
+async def wolframAlpha(ctx, *args):
+    global WOLFRAM
+    global wra
+    image_list = []
+    title_list = []
+    search = ''
+    for name in args:
+        search += str(name) + " "
+    response = requests.get("http://api.wolframalpha.com/v2/query?input=" + search + "&appid=" + str(WOLFRAM) + "&output=json")
+    res = response.json()['queryresult']['pods']
+    length = 0
+    for i in range(0, response.json()['queryresult']['numpods']):
+        for j in range(0, len(res[i]['subpods'])):
+            image_list.append(res[i]['subpods'][j]['img']['src'])
+            title_list.append(res[i]['title'])
+    toEmbed = discord.Embed(color=0x1ae671, title= "WolframAlpha Search")
+    toEmbed.set_image(url = res[0]['subpods'][0]['img']['src'])
+    toEmbed.set_footer(text=title_list[0] + "\n" + "(1" + "\\" + str(len(image_list)) + ")")
+    message = await ctx.send(embed = toEmbed)
+    info_list = [title_list, image_list, length]
+    wra[message.id] = info_list
+    await message.add_reaction('\N{LEFTWARDS BLACK ARROW}')
+    await message.add_reaction('\N{BLACK RIGHTWARDS ARROW}')
+
+async def nextHowl(message, value):
+    global wra
+    if value == "-":
+        wra[message.id][2] -= 1
+    else:
+        wra[message.id][2] += 1
+    wra[message.id][2] = cycleIndex(wra[message.id][2], len(wra[message.id][0])-1)
+    message.embeds[0].set_image(url = wra[message.id][1][wra[message.id][2]])
+    message.embeds[0].set_footer(text = wra[message.id][0][wra[message.id][2]] + "\n" + "("
+                                 + str(wra[message.id][2] +1) + "\\" + str(len(wra[message.id][1])) + ")")                               
+    await message.edit(embed = message.embeds[0])
     
+def cycleIndex(value, indexLength):
+#Helper function to determine if the attempted index value is out of bounds
+    if value > indexLength:
+        return 0
+    elif value < 0:
+        return indexLength
+    else:
+        return value
+
 bot.run(TOKEN)
